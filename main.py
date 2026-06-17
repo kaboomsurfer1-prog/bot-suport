@@ -5,17 +5,14 @@ import discord
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-
 SUPPORT_CREATE_CHANNEL_ID = int(os.getenv("SUPPORT_CREATE_CHANNEL_ID", "0"))
 
-# Rolul care poate doar VEDEA canalele support, dar NU poate intra.
 SUPPORT_VIEW_ROLE_IDS = [
     int(role_id.strip())
     for role_id in os.getenv("SUPPORT_VIEW_ROLE_IDS", "1505912122926694550").split(",")
     if role_id.strip().isdigit()
 ]
 
-# Rolul care poate VEDEA + INTRA + VORBI.
 SUPPORT_CONNECT_ROLE_IDS = [
     int(role_id.strip())
     for role_id in os.getenv("SUPPORT_CONNECT_ROLE_IDS", "1516635039520260186").split(",")
@@ -66,7 +63,6 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
     for channel in guild.voice_channels:
         if category and channel.category_id != category.id:
             continue
-
         number = get_support_number(channel.name)
         if number is not None:
             used_numbers.add(number)
@@ -74,24 +70,27 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
     number = 1
     while number in used_numbers:
         number += 1
-
     return number
 
 
 def build_support_overwrites(guild: discord.Guild) -> dict:
     """
-    Permessi finali:
-    - @everyone: non vede e non entra
-    - SUPPORT_VIEW_ROLE_IDS: vede, ma non entra
-    - SUPPORT_CONNECT_ROLE_IDS: vede, entra e parla
+    FINAL:
+    @everyone: non vede e non entra nei support.
+    1505912122926694550: vede support, NON entra.
+    1516635039520260186: vede, entra e parla.
+
+    IMPORTANTISSIMO:
+    Per il ruolo view-only NON mettiamo speak=False.
+    Così quel ruolo non viene bloccato/mutato in altri canali vocali.
     """
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=False,
             connect=False,
-            speak=False,
-            stream=False,
-            use_voice_activation=False
+            speak=None,
+            stream=None,
+            use_voice_activation=None
         )
     }
 
@@ -107,23 +106,21 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
             move_members=True
         )
 
-    # Ruolo che vede soltanto.
+    # Può solo vedere, non può connettersi. Speak resta NEUTRO.
     for role_id in SUPPORT_VIEW_ROLE_IDS:
         role = guild.get_role(role_id)
         if role:
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True,
                 connect=False,
-                speak=False,
-                stream=False,
-                use_voice_activation=False
+                speak=None,
+                stream=None,
+                use_voice_activation=None
             )
         else:
             print(f"ATENTIE: rol view-only negasit: {role_id}")
 
-    # Ruolo che vede + entra.
-    # Viene scritto DOPO il view-only, così se per errore un ID è in entrambe le variabili,
-    # l'accesso connect vince per quel ruolo.
+    # Può vedere, entrare e parlare.
     found_connect_role = False
     for role_id in SUPPORT_CONNECT_ROLE_IDS:
         role = guild.get_role(role_id)
@@ -147,8 +144,8 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
 
 async def delete_if_empty(channel_id: int):
     await asyncio.sleep(SUPPORT_DELETE_DELAY)
-
     channel = bot.get_channel(channel_id)
+
     if not isinstance(channel, discord.VoiceChannel):
         dynamic_support_channels.discard(channel_id)
         return
@@ -159,8 +156,6 @@ async def delete_if_empty(channel_id: int):
             await channel.delete(reason="Canal suport gol")
             dynamic_support_channels.discard(channel_id)
             print(f"Canal sters: {channel.name}")
-        except discord.Forbidden:
-            print("Eroare: botul nu are permisiunea Manage Channels.")
         except Exception as e:
             print(f"Eroare la stergerea canalului: {e}")
 
@@ -170,7 +165,7 @@ async def on_ready():
     print(f"Bot Suport online ca {bot.user} | Servere: {len(bot.guilds)}")
     print(f"SUPPORT_VIEW_ROLE_IDS={SUPPORT_VIEW_ROLE_IDS}")
     print(f"SUPPORT_CONNECT_ROLE_IDS={SUPPORT_CONNECT_ROLE_IDS}")
-    print("VERSIUNE: VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186")
+    print("VERSIUNE: VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186")
 
     for guild in bot.guilds:
         for channel in guild.voice_channels:
@@ -179,7 +174,7 @@ async def on_ready():
                 try:
                     await channel.edit(
                         overwrites=build_support_overwrites(guild),
-                        reason="VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186"
+                        reason="VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186"
                     )
                     print(f"Permisiuni actualizate pentru: {channel.name}")
                 except Exception as e:
@@ -210,8 +205,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
         guild = member.guild
         create_channel = after.channel
-
         category = None
+
         if SUPPORT_CATEGORY_ID:
             found = guild.get_channel(SUPPORT_CATEGORY_ID)
             if isinstance(found, discord.CategoryChannel):
@@ -231,17 +226,9 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 overwrites=build_support_overwrites(guild),
                 reason=f"Suport creat de {member}"
             )
-
             dynamic_support_channels.add(new_channel.id)
             await member.move_to(new_channel, reason="Mutat in canalul suport creat")
             print(f"Canal creat: {new_channel.name} pentru {member}")
-
-        except discord.Forbidden:
-            print("Eroare: botul nu are permisiuni Manage Channels / Move Members.")
-            try:
-                await member.move_to(None)
-            except Exception:
-                pass
         except Exception as e:
             print(f"Eroare la crearea canalului suport: {e}")
             try:
@@ -256,34 +243,20 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 @bot.tree.command(name="suport_status", description="Arata cate canale suport sunt active.")
 async def suport_status(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
-        await interaction.response.send_message(
-            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Nu ai permisiunea sa folosesti aceasta comanda.", ephemeral=True)
         return
 
-    active_channels = [
-        channel for channel in interaction.guild.voice_channels
-        if is_dynamic_support_channel(channel)
-    ]
-
-    await interaction.response.send_message(
-        f"✅ Canale suport active: `{len(active_channels)}`",
-        ephemeral=True
-    )
+    active_channels = [channel for channel in interaction.guild.voice_channels if is_dynamic_support_channel(channel)]
+    await interaction.response.send_message(f"✅ Canale suport active: `{len(active_channels)}`", ephemeral=True)
 
 
 @bot.tree.command(name="suport_cleanup", description="Sterge canalele suport goale.")
 async def suport_cleanup(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
-        await interaction.response.send_message(
-            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Nu ai permisiunea sa folosesti aceasta comanda.", ephemeral=True)
         return
 
     deleted = 0
-
     for channel in list(interaction.guild.voice_channels):
         if is_dynamic_support_channel(channel):
             non_bot_members = [member for member in channel.members if not member.bot]
@@ -295,19 +268,13 @@ async def suport_cleanup(interaction: discord.Interaction):
                 except Exception:
                     pass
 
-    await interaction.response.send_message(
-        f"✅ Curatare finalizata. Canale sterse: `{deleted}`",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"✅ Curatare finalizata. Canale sterse: `{deleted}`", ephemeral=True)
 
 
 @bot.tree.command(name="suport_fix_permissions", description="Repara permisiunile canalelor support.")
 async def suport_fix_permissions(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
-        await interaction.response.send_message(
-            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Nu ai permisiunea sa folosesti aceasta comanda.", ephemeral=True)
         return
 
     fixed = 0
@@ -318,52 +285,19 @@ async def suport_fix_permissions(interaction: discord.Interaction):
             try:
                 await channel.edit(
                     overwrites=overwrites,
-                    reason="VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186"
+                    reason="VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186"
                 )
                 fixed += 1
             except Exception:
                 pass
 
-    await interaction.response.send_message(
-        f"✅ Permisiunile au fost actualizate pentru `{fixed}` canale support.",
-        ephemeral=True
-    )
-
-
-@bot.tree.command(name="suport_debug_permissions", description="Arata rolurile configurate pentru support.")
-async def suport_debug_permissions(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
-        await interaction.response.send_message(
-            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
-            ephemeral=True
-        )
-        return
-
-    view_roles = []
-    for role_id in SUPPORT_VIEW_ROLE_IDS:
-        role = interaction.guild.get_role(role_id)
-        view_roles.append(f"{role.mention if role else 'NEGasit'} (`{role_id}`)")
-
-    connect_roles = []
-    for role_id in SUPPORT_CONNECT_ROLE_IDS:
-        role = interaction.guild.get_role(role_id)
-        connect_roles.append(f"{role.mention if role else 'NEGasit'} (`{role_id}`)")
-
-    await interaction.response.send_message(
-        "**Config support:**\n"
-        f"👁️ Rol view-only: {', '.join(view_roles)}\n"
-        f"🔊 Rol connect: {', '.join(connect_roles)}\n"
-        f"Versiune: `VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186`",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"✅ Permisiunile au fost actualizate pentru `{fixed}` canale support.", ephemeral=True)
 
 
 if not TOKEN:
     raise RuntimeError("Lipseste DISCORD_TOKEN in variabilele Railway.")
-
 if SUPPORT_CREATE_CHANNEL_ID == 0:
     raise RuntimeError("Lipseste SUPPORT_CREATE_CHANNEL_ID in variabilele Railway.")
-
 if not SUPPORT_CONNECT_ROLE_IDS:
     raise RuntimeError("Lipseste SUPPORT_CONNECT_ROLE_IDS in variabilele Railway.")
 
