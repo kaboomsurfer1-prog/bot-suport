@@ -8,14 +8,14 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 SUPPORT_CREATE_CHANNEL_ID = int(os.getenv("SUPPORT_CREATE_CHANNEL_ID", "0"))
 
-# Ruoli che possono SOLO vedere i canali support, ma NON entrare.
+# Rolul care poate doar VEDEA canalele support, dar NU poate intra.
 SUPPORT_VIEW_ROLE_IDS = [
     int(role_id.strip())
     for role_id in os.getenv("SUPPORT_VIEW_ROLE_IDS", "1505912122926694550").split(",")
     if role_id.strip().isdigit()
 ]
 
-# Ruoli che possono vedere, entrare e parlare nei canali support.
+# Rolul care poate VEDEA + INTRA + VORBI.
 SUPPORT_CONNECT_ROLE_IDS = [
     int(role_id.strip())
     for role_id in os.getenv("SUPPORT_CONNECT_ROLE_IDS", "1516635039520260186").split(",")
@@ -41,10 +41,6 @@ def has_any_role(member: discord.Member, role_ids: list[int]) -> bool:
 
 
 def can_create_or_enter_support(member: discord.Member) -> bool:
-    return has_any_role(member, SUPPORT_CONNECT_ROLE_IDS)
-
-
-def can_use_support_commands(member: discord.Member) -> bool:
     return has_any_role(member, SUPPORT_CONNECT_ROLE_IDS)
 
 
@@ -84,7 +80,7 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
 
 def build_support_overwrites(guild: discord.Guild) -> dict:
     """
-    Permessi:
+    Permessi finali:
     - @everyone: non vede e non entra
     - SUPPORT_VIEW_ROLE_IDS: vede, ma non entra
     - SUPPORT_CONNECT_ROLE_IDS: vede, entra e parla
@@ -111,11 +107,8 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
             move_members=True
         )
 
-    # Ruoli che possono solo vedere.
+    # Ruolo che vede soltanto.
     for role_id in SUPPORT_VIEW_ROLE_IDS:
-        if role_id in SUPPORT_CONNECT_ROLE_IDS:
-            continue
-
         role = guild.get_role(role_id)
         if role:
             overwrites[role] = discord.PermissionOverwrite(
@@ -126,9 +119,11 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
                 use_voice_activation=False
             )
         else:
-            print(f"ATENTIE: rolul pentru vizualizare nu a fost gasit: {role_id}")
+            print(f"ATENTIE: rol view-only negasit: {role_id}")
 
-    # Ruoli che possono vedere + entrare + parlare.
+    # Ruolo che vede + entra.
+    # Viene scritto DOPO il view-only, così se per errore un ID è in entrambe le variabili,
+    # l'accesso connect vince per quel ruolo.
     found_connect_role = False
     for role_id in SUPPORT_CONNECT_ROLE_IDS:
         role = guild.get_role(role_id)
@@ -142,10 +137,10 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
                 use_voice_activation=True
             )
         else:
-            print(f"ATENTIE: rolul pentru conectare nu a fost gasit: {role_id}")
+            print(f"ATENTIE: rol connect negasit: {role_id}")
 
     if not found_connect_role:
-        print("ATENTIE: niciun rol pentru conectare nu a fost gasit. Verifica SUPPORT_CONNECT_ROLE_IDS.")
+        print("ATENTIE: niciun rol connect gasit. Verifica SUPPORT_CONNECT_ROLE_IDS.")
 
     return overwrites
 
@@ -173,6 +168,9 @@ async def delete_if_empty(channel_id: int):
 @bot.event
 async def on_ready():
     print(f"Bot Suport online ca {bot.user} | Servere: {len(bot.guilds)}")
+    print(f"SUPPORT_VIEW_ROLE_IDS={SUPPORT_VIEW_ROLE_IDS}")
+    print(f"SUPPORT_CONNECT_ROLE_IDS={SUPPORT_CONNECT_ROLE_IDS}")
+    print("VERSIUNE: VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186")
 
     for guild in bot.guilds:
         for channel in guild.voice_channels:
@@ -181,7 +179,7 @@ async def on_ready():
                 try:
                     await channel.edit(
                         overwrites=build_support_overwrites(guild),
-                        reason="Fix permessi support: view role + connect role"
+                        reason="VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186"
                     )
                     print(f"Permisiuni actualizate pentru: {channel.name}")
                 except Exception as e:
@@ -202,11 +200,10 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
-    # Cand cineva intra in canalul "Creare Suport"
     if after.channel and after.channel.id == SUPPORT_CREATE_CHANNEL_ID:
         if not can_create_or_enter_support(member):
             try:
-                await member.move_to(None, reason="Utilizator fara rol de conectare in Creare Suport")
+                await member.move_to(None, reason="Fara rol connect pentru Creare Suport")
             except Exception:
                 pass
             return
@@ -252,14 +249,13 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             except Exception:
                 pass
 
-    # Cand cineva iese dintr-un canal suport, verificam daca este gol
     if before.channel and is_dynamic_support_channel(before.channel):
         bot.loop.create_task(delete_if_empty(before.channel.id))
 
 
 @bot.tree.command(name="suport_status", description="Arata cate canale suport sunt active.")
 async def suport_status(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member) or not can_use_support_commands(interaction.user):
+    if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
         await interaction.response.send_message(
             "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
@@ -279,7 +275,7 @@ async def suport_status(interaction: discord.Interaction):
 
 @bot.tree.command(name="suport_cleanup", description="Sterge canalele suport goale.")
 async def suport_cleanup(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member) or not can_use_support_commands(interaction.user):
+    if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
         await interaction.response.send_message(
             "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
@@ -305,9 +301,9 @@ async def suport_cleanup(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="suport_fix_permissions", description="Repara permisiunile canalelor suport.")
+@bot.tree.command(name="suport_fix_permissions", description="Repara permisiunile canalelor support.")
 async def suport_fix_permissions(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member) or not can_use_support_commands(interaction.user):
+    if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
         await interaction.response.send_message(
             "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
@@ -322,14 +318,42 @@ async def suport_fix_permissions(interaction: discord.Interaction):
             try:
                 await channel.edit(
                     overwrites=overwrites,
-                    reason="Fix permessi support: view role + connect role"
+                    reason="VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186"
                 )
                 fixed += 1
             except Exception:
                 pass
 
     await interaction.response.send_message(
-        f"✅ Permisiunile au fost actualizate pentru `{fixed}` canale suport.",
+        f"✅ Permisiunile au fost actualizate pentru `{fixed}` canale support.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="suport_debug_permissions", description="Arata rolurile configurate pentru support.")
+async def suport_debug_permissions(interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not can_create_or_enter_support(interaction.user):
+        await interaction.response.send_message(
+            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
+            ephemeral=True
+        )
+        return
+
+    view_roles = []
+    for role_id in SUPPORT_VIEW_ROLE_IDS:
+        role = interaction.guild.get_role(role_id)
+        view_roles.append(f"{role.mention if role else 'NEGasit'} (`{role_id}`)")
+
+    connect_roles = []
+    for role_id in SUPPORT_CONNECT_ROLE_IDS:
+        role = interaction.guild.get_role(role_id)
+        connect_roles.append(f"{role.mention if role else 'NEGasit'} (`{role_id}`)")
+
+    await interaction.response.send_message(
+        "**Config support:**\n"
+        f"👁️ Rol view-only: {', '.join(view_roles)}\n"
+        f"🔊 Rol connect: {', '.join(connect_roles)}\n"
+        f"Versiune: `VIEW_ONLY_1505912122926694550__CONNECT_1516635039520260186`",
         ephemeral=True
     )
 
@@ -340,7 +364,7 @@ if not TOKEN:
 if SUPPORT_CREATE_CHANNEL_ID == 0:
     raise RuntimeError("Lipseste SUPPORT_CREATE_CHANNEL_ID in variabilele Railway.")
 
-if not SUPPORT_VIEW_ROLE_IDS and not SUPPORT_CONNECT_ROLE_IDS:
-    raise RuntimeError("Lipsesc SUPPORT_VIEW_ROLE_IDS / SUPPORT_CONNECT_ROLE_IDS in variabilele Railway.")
+if not SUPPORT_CONNECT_ROLE_IDS:
+    raise RuntimeError("Lipseste SUPPORT_CONNECT_ROLE_IDS in variabilele Railway.")
 
 bot.run(TOKEN)
