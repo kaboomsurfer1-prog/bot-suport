@@ -9,7 +9,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 SUPPORT_CREATE_CHANNEL_ID = int(os.getenv("SUPPORT_CREATE_CHANNEL_ID", "0"))
 SUPPORT_STAFF_ROLE_IDS = [
     int(role_id.strip())
-    for role_id in os.getenv("SUPPORT_STAFF_ROLE_IDS", "1516635039520260186").split(",")
+    for role_id in os.getenv("SUPPORT_STAFF_ROLE_IDS", "1505912122926694550").split(",")
     if role_id.strip().isdigit()
 ]
 SUPPORT_CATEGORY_ID = int(os.getenv("SUPPORT_CATEGORY_ID", "0"))
@@ -69,17 +69,17 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
 def build_support_overwrites(guild: discord.Guild) -> dict:
     """
     Permisiuni corecte:
-    - @everyone vede canalul, dar NU se poate conecta.
+    - @everyone NU vede canalul si NU se poate conecta.
     - rolul staff configurat se poate conecta si poate vorbi.
     - botul poate gestiona canalul.
     """
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
-            view_channel=True,
+            view_channel=False,
             connect=False,
-            speak=None,
-            stream=None,
-            use_voice_activation=None
+            speak=False,
+            stream=False,
+            use_voice_activation=False
         )
     }
 
