@@ -9,10 +9,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 SUPPORT_CREATE_CHANNEL_ID = int(os.getenv("SUPPORT_CREATE_CHANNEL_ID", "0"))
 SUPPORT_STAFF_ROLE_IDS = [
     int(role_id.strip())
-    for role_id in os.getenv(
-        "SUPPORT_STAFF_ROLE_IDS",
-        "1516635039520260186"
-    ).split(",")
+    for role_id in os.getenv("SUPPORT_STAFF_ROLE_IDS", "1516635039520260186").split(",")
     if role_id.strip().isdigit()
 ]
 SUPPORT_CATEGORY_ID = int(os.getenv("SUPPORT_CATEGORY_ID", "0"))
@@ -51,9 +48,11 @@ def is_dynamic_support_channel(channel: discord.VoiceChannel | None) -> bool:
 
 def get_next_support_number(guild: discord.Guild, category: discord.CategoryChannel | None) -> int:
     used_numbers = set()
+
     for channel in guild.voice_channels:
         if category and channel.category_id != category.id:
             continue
+
         number = get_support_number(channel.name)
         if number is not None:
             used_numbers.add(number)
@@ -61,7 +60,51 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
     number = 1
     while number in used_numbers:
         number += 1
+
     return number
+
+
+def build_support_overwrites(guild: discord.Guild) -> dict:
+    # Blocca @everyone: tutti vedono il canale ma NON possono connettersi.
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            connect=False,
+            speak=False
+        )
+    }
+
+    # Permessi per il bot.
+    bot_member = guild.me
+    if bot_member:
+        overwrites[bot_member] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+            manage_channels=True,
+            move_members=True
+        )
+
+    # Permessi solo per il ruolo staff configurato.
+    found_staff_role = False
+    for role_id in SUPPORT_STAFF_ROLE_IDS:
+        role = guild.get_role(role_id)
+        if role:
+            found_staff_role = True
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                connect=True,
+                speak=True,
+                stream=True,
+                use_voice_activation=True
+            )
+        else:
+            print(f"ATTENZIONE: ruolo staff non trovato: {role_id}")
+
+    if not found_staff_role:
+        print("ATTENZIONE: nessun ruolo staff trovato. Controlla SUPPORT_STAFF_ROLE_IDS.")
+
+    return overwrites
 
 
 async def delete_if_empty(channel_id: int):
@@ -88,10 +131,19 @@ async def delete_if_empty(channel_id: int):
 async def on_ready():
     print(f"Bot Suport online come {bot.user} | Server: {len(bot.guilds)}")
 
+    # Recupera e sistema i permessi dei support già esistenti.
     for guild in bot.guilds:
         for channel in guild.voice_channels:
             if is_dynamic_support_channel(channel):
                 dynamic_support_channels.add(channel.id)
+                try:
+                    await channel.edit(
+                        overwrites=build_support_overwrites(guild),
+                        reason="Aggiornamento permessi support"
+                    )
+                except Exception as e:
+                    print(f"Impossibile aggiornare permessi su {channel.name}: {e}")
+
                 if len([m for m in channel.members if not m.bot]) == 0:
                     bot.loop.create_task(delete_if_empty(channel.id))
 
@@ -107,6 +159,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
+    # Quando uno staff entra/clicca nel canale "Creare Suport".
     if after.channel and after.channel.id == SUPPORT_CREATE_CHANNEL_ID:
         if not is_staff(member):
             try:
@@ -117,8 +170,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
         guild = member.guild
         create_channel = after.channel
-        category = None
 
+        category = None
         if SUPPORT_CATEGORY_ID:
             found = guild.get_channel(SUPPORT_CATEGORY_ID)
             if isinstance(found, discord.CategoryChannel):
@@ -135,8 +188,10 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 name=channel_name,
                 category=category,
                 user_limit=SUPPORT_USER_LIMIT,
+                overwrites=build_support_overwrites(guild),
                 reason=f"Support creato da {member}"
             )
+
             dynamic_support_channels.add(new_channel.id)
             await member.move_to(new_channel, reason="Spostato nel support creato")
             print(f"Creato {new_channel.name} per {member}")
@@ -154,6 +209,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             except Exception:
                 pass
 
+    # Quando qualcuno esce da un support dinamico, controlla se è vuoto.
     if before.channel and is_dynamic_support_channel(before.channel):
         bot.loop.create_task(delete_if_empty(before.channel.id))
 
@@ -171,6 +227,7 @@ async def suport_status(interaction: discord.Interaction):
         channel for channel in interaction.guild.voice_channels
         if is_dynamic_support_channel(channel)
     ]
+
     await interaction.response.send_message(
         f"✅ Canale support active: `{len(active_channels)}`",
         ephemeral=True
@@ -187,6 +244,7 @@ async def suport_cleanup(interaction: discord.Interaction):
         return
 
     deleted = 0
+
     for channel in list(interaction.guild.voice_channels):
         if is_dynamic_support_channel(channel):
             non_bot_members = [member for member in channel.members if not member.bot]
@@ -200,6 +258,35 @@ async def suport_cleanup(interaction: discord.Interaction):
 
     await interaction.response.send_message(
         f"✅ Cleanup complet. Canale șterse: `{deleted}`",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="suport_fix_permissions", description="Blochează canalele support doar pentru rolul staff.")
+async def suport_fix_permissions(interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+        await interaction.response.send_message(
+            "❌ Nu ai permisiunea să folosești această comandă.",
+            ephemeral=True
+        )
+        return
+
+    fixed = 0
+    overwrites = build_support_overwrites(interaction.guild)
+
+    for channel in interaction.guild.voice_channels:
+        if is_dynamic_support_channel(channel):
+            try:
+                await channel.edit(
+                    overwrites=overwrites,
+                    reason="Fix permessi support"
+                )
+                fixed += 1
+            except Exception:
+                pass
+
+    await interaction.response.send_message(
+        f"✅ Permisiuni actualizate pentru `{fixed}` canale support.",
         ephemeral=True
     )
 
