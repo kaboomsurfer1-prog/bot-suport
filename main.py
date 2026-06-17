@@ -65,27 +65,32 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
 
 
 def build_support_overwrites(guild: discord.Guild) -> dict:
-    # Blocca @everyone: tutti vedono il canale ma NON possono connettersi.
+    """
+    Blocca @everyone solo dalla connessione.
+    IMPORTANTE: non mette speak=False, così chi entra non viene mutato.
+    """
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=True,
             connect=False,
-            speak=False
+            speak=None,
+            stream=None,
+            use_voice_activation=None
         )
     }
 
-    # Permessi per il bot.
     bot_member = guild.me
     if bot_member:
         overwrites[bot_member] = discord.PermissionOverwrite(
             view_channel=True,
             connect=True,
             speak=True,
+            stream=True,
+            use_voice_activation=True,
             manage_channels=True,
             move_members=True
         )
 
-    # Permessi solo per il ruolo staff configurato.
     found_staff_role = False
     for role_id in SUPPORT_STAFF_ROLE_IDS:
         role = guild.get_role(role_id)
@@ -131,7 +136,6 @@ async def delete_if_empty(channel_id: int):
 async def on_ready():
     print(f"Bot Suport online come {bot.user} | Server: {len(bot.guilds)}")
 
-    # Recupera e sistema i permessi dei support già esistenti.
     for guild in bot.guilds:
         for channel in guild.voice_channels:
             if is_dynamic_support_channel(channel):
@@ -139,7 +143,7 @@ async def on_ready():
                 try:
                     await channel.edit(
                         overwrites=build_support_overwrites(guild),
-                        reason="Aggiornamento permessi support"
+                        reason="Aggiornamento permessi support no mute"
                     )
                 except Exception as e:
                     print(f"Impossibile aggiornare permessi su {channel.name}: {e}")
@@ -159,7 +163,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
-    # Quando uno staff entra/clicca nel canale "Creare Suport".
     if after.channel and after.channel.id == SUPPORT_CREATE_CHANNEL_ID:
         if not is_staff(member):
             try:
@@ -209,7 +212,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             except Exception:
                 pass
 
-    # Quando qualcuno esce da un support dinamico, controlla se è vuoto.
     if before.channel and is_dynamic_support_channel(before.channel):
         bot.loop.create_task(delete_if_empty(before.channel.id))
 
@@ -262,7 +264,7 @@ async def suport_cleanup(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="suport_fix_permissions", description="Blochează canalele support doar pentru rolul staff.")
+@bot.tree.command(name="suport_fix_permissions", description="Fix permessi support senza mute.")
 async def suport_fix_permissions(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
         await interaction.response.send_message(
@@ -279,14 +281,14 @@ async def suport_fix_permissions(interaction: discord.Interaction):
             try:
                 await channel.edit(
                     overwrites=overwrites,
-                    reason="Fix permessi support"
+                    reason="Fix permessi support no mute"
                 )
                 fixed += 1
             except Exception:
                 pass
 
     await interaction.response.send_message(
-        f"✅ Permisiuni actualizate pentru `{fixed}` canale support.",
+        f"✅ Permisiuni actualizate pentru `{fixed}` canale support. Acum utilizatorii pot vorbi.",
         ephemeral=True
     )
 
