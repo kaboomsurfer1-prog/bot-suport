@@ -41,8 +41,10 @@ def get_support_number(channel_name: str) -> int | None:
 def is_dynamic_support_channel(channel: discord.VoiceChannel | None) -> bool:
     if channel is None:
         return False
+
     if channel.id in dynamic_support_channels:
         return True
+
     return get_support_number(channel.name) is not None
 
 
@@ -66,8 +68,10 @@ def get_next_support_number(guild: discord.Guild, category: discord.CategoryChan
 
 def build_support_overwrites(guild: discord.Guild) -> dict:
     """
-    Blocca @everyone solo dalla connessione.
-    IMPORTANTE: non mette speak=False, così chi entra non viene mutato.
+    Permisiuni corecte:
+    - @everyone vede canalul, dar NU se poate conecta.
+    - rolul staff configurat se poate conecta si poate vorbi.
+    - botul poate gestiona canalul.
     """
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
@@ -92,6 +96,7 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
         )
 
     found_staff_role = False
+
     for role_id in SUPPORT_STAFF_ROLE_IDS:
         role = guild.get_role(role_id)
         if role:
@@ -104,10 +109,10 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
                 use_voice_activation=True
             )
         else:
-            print(f"ATTENZIONE: ruolo staff non trovato: {role_id}")
+            print(f"ATENTIE: rolul staff nu a fost gasit: {role_id}")
 
     if not found_staff_role:
-        print("ATTENZIONE: nessun ruolo staff trovato. Controlla SUPPORT_STAFF_ROLE_IDS.")
+        print("ATENTIE: niciun rol staff nu a fost gasit. Verifica SUPPORT_STAFF_ROLE_IDS.")
 
     return overwrites
 
@@ -121,41 +126,44 @@ async def delete_if_empty(channel_id: int):
         return
 
     non_bot_members = [member for member in channel.members if not member.bot]
+
     if len(non_bot_members) == 0 and is_dynamic_support_channel(channel):
         try:
-            await channel.delete(reason="Canale support vuoto")
+            await channel.delete(reason="Canal suport gol")
             dynamic_support_channels.discard(channel_id)
-            print(f"Canale cancellato: {channel.name}")
+            print(f"Canal sters: {channel.name}")
         except discord.Forbidden:
-            print("Errore: il bot non ha permesso Manage Channels.")
+            print("Eroare: botul nu are permisiunea Manage Channels.")
         except Exception as e:
-            print(f"Errore cancellazione canale: {e}")
+            print(f"Eroare la stergerea canalului: {e}")
 
 
 @bot.event
 async def on_ready():
-    print(f"Bot Suport online come {bot.user} | Server: {len(bot.guilds)}")
+    print(f"Bot Suport online ca {bot.user} | Servere: {len(bot.guilds)}")
 
     for guild in bot.guilds:
         for channel in guild.voice_channels:
             if is_dynamic_support_channel(channel):
                 dynamic_support_channels.add(channel.id)
+
                 try:
                     await channel.edit(
                         overwrites=build_support_overwrites(guild),
-                        reason="Aggiornamento permessi support no mute"
+                        reason="Actualizare permisiuni suport fara mute"
                     )
+                    print(f"Permisiuni actualizate pentru: {channel.name}")
                 except Exception as e:
-                    print(f"Impossibile aggiornare permessi su {channel.name}: {e}")
+                    print(f"Nu pot actualiza permisiunile pentru {channel.name}: {e}")
 
                 if len([m for m in channel.members if not m.bot]) == 0:
                     bot.loop.create_task(delete_if_empty(channel.id))
 
     try:
         await bot.tree.sync()
-        print("Slash commands sincronizzati.")
+        print("Comenzile slash au fost sincronizate.")
     except Exception as e:
-        print(f"Errore sync slash commands: {e}")
+        print(f"Eroare la sincronizarea comenzilor slash: {e}")
 
 
 @bot.event
@@ -163,10 +171,11 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
+    # Cand cineva intra in canalul "Creare Suport"
     if after.channel and after.channel.id == SUPPORT_CREATE_CHANNEL_ID:
         if not is_staff(member):
             try:
-                await member.move_to(None, reason="Non staff nel canale Creare Suport")
+                await member.move_to(None, reason="Utilizator fara rol staff in Creare Suport")
             except Exception:
                 pass
             return
@@ -192,35 +201,37 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 category=category,
                 user_limit=SUPPORT_USER_LIMIT,
                 overwrites=build_support_overwrites(guild),
-                reason=f"Support creato da {member}"
+                reason=f"Suport creat de {member}"
             )
 
             dynamic_support_channels.add(new_channel.id)
-            await member.move_to(new_channel, reason="Spostato nel support creato")
-            print(f"Creato {new_channel.name} per {member}")
+            await member.move_to(new_channel, reason="Mutat in canalul suport creat")
+
+            print(f"Canal creat: {new_channel.name} pentru {member}")
 
         except discord.Forbidden:
-            print("Errore: il bot non ha permessi Manage Channels / Move Members.")
+            print("Eroare: botul nu are permisiuni Manage Channels / Move Members.")
             try:
                 await member.move_to(None)
             except Exception:
                 pass
         except Exception as e:
-            print(f"Errore creazione support: {e}")
+            print(f"Eroare la crearea canalului suport: {e}")
             try:
                 await member.move_to(None)
             except Exception:
                 pass
 
+    # Cand cineva iese dintr-un canal suport, verificam daca este gol
     if before.channel and is_dynamic_support_channel(before.channel):
         bot.loop.create_task(delete_if_empty(before.channel.id))
 
 
-@bot.tree.command(name="suport_status", description="Mostra quanti canali support sono attivi.")
+@bot.tree.command(name="suport_status", description="Arata cate canale suport sunt active.")
 async def suport_status(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
         await interaction.response.send_message(
-            "❌ Nu ai permisiunea să folosești această comandă.",
+            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
         )
         return
@@ -231,16 +242,16 @@ async def suport_status(interaction: discord.Interaction):
     ]
 
     await interaction.response.send_message(
-        f"✅ Canale support active: `{len(active_channels)}`",
+        f"✅ Canale suport active: `{len(active_channels)}`",
         ephemeral=True
     )
 
 
-@bot.tree.command(name="suport_cleanup", description="Șterge canalele support goale.")
+@bot.tree.command(name="suport_cleanup", description="Sterge canalele suport goale.")
 async def suport_cleanup(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
         await interaction.response.send_message(
-            "❌ Nu ai permisiunea să folosești această comandă.",
+            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
         )
         return
@@ -252,23 +263,23 @@ async def suport_cleanup(interaction: discord.Interaction):
             non_bot_members = [member for member in channel.members if not member.bot]
             if len(non_bot_members) == 0:
                 try:
-                    await channel.delete(reason="Cleanup support vuoto")
+                    await channel.delete(reason="Curatare canale suport goale")
                     dynamic_support_channels.discard(channel.id)
                     deleted += 1
                 except Exception:
                     pass
 
     await interaction.response.send_message(
-        f"✅ Cleanup complet. Canale șterse: `{deleted}`",
+        f"✅ Curatare finalizata. Canale sterse: `{deleted}`",
         ephemeral=True
     )
 
 
-@bot.tree.command(name="suport_fix_permissions", description="Fix permessi support senza mute.")
+@bot.tree.command(name="suport_fix_permissions", description="Repara permisiunile canalelor suport.")
 async def suport_fix_permissions(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
         await interaction.response.send_message(
-            "❌ Nu ai permisiunea să folosești această comandă.",
+            "❌ Nu ai permisiunea sa folosesti aceasta comanda.",
             ephemeral=True
         )
         return
@@ -281,25 +292,25 @@ async def suport_fix_permissions(interaction: discord.Interaction):
             try:
                 await channel.edit(
                     overwrites=overwrites,
-                    reason="Fix permessi support no mute"
+                    reason="Reparare permisiuni suport fara mute"
                 )
                 fixed += 1
             except Exception:
                 pass
 
     await interaction.response.send_message(
-        f"✅ Permisiuni actualizate pentru `{fixed}` canale support. Acum utilizatorii pot vorbi.",
+        f"✅ Permisiunile au fost actualizate pentru `{fixed}` canale suport. Utilizatorii cu rolul staff pot vorbi.",
         ephemeral=True
     )
 
 
 if not TOKEN:
-    raise RuntimeError("Manca DISCORD_TOKEN nelle variabili ambiente.")
+    raise RuntimeError("Lipseste DISCORD_TOKEN in variabilele Railway.")
 
 if SUPPORT_CREATE_CHANNEL_ID == 0:
-    raise RuntimeError("Manca SUPPORT_CREATE_CHANNEL_ID nelle variabili ambiente.")
+    raise RuntimeError("Lipseste SUPPORT_CREATE_CHANNEL_ID in variabilele Railway.")
 
 if not SUPPORT_STAFF_ROLE_IDS:
-    raise RuntimeError("Manca SUPPORT_STAFF_ROLE_IDS nelle variabili ambiente.")
+    raise RuntimeError("Lipseste SUPPORT_STAFF_ROLE_IDS in variabilele Railway.")
 
 bot.run(TOKEN)
