@@ -77,12 +77,8 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
     """
     FINAL:
     @everyone: non vede e non entra nei support.
-    1505912122926694550: vede support, NON entra.
-    1516635039520260186: vede, entra e parla.
-
-    IMPORTANTISSIMO:
-    Per il ruolo view-only NON mettiamo speak=False.
-    Così quel ruolo non viene bloccato/mutato in altri canali vocali.
+    I ruoli configurati in SUPPORT_VIEW_ROLE_IDS e SUPPORT_CONNECT_ROLE_IDS
+    possono vedere, entrare, parlare e usare l'attività vocale nei canali Support.
     """
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
@@ -106,16 +102,16 @@ def build_support_overwrites(guild: discord.Guild) -> dict:
             move_members=True
         )
 
-    # Può solo vedere, non può connettersi. Speak resta NEUTRO.
+    # Può vedere, entrare, parlare e usare l'attività vocale.
     for role_id in SUPPORT_VIEW_ROLE_IDS:
         role = guild.get_role(role_id)
         if role:
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True,
                 connect=False,
-                speak=None,
-                stream=None,
-                use_voice_activation=None
+                speak=True,
+                stream=True,
+                use_voice_activation=True
             )
         else:
             print(f"ATENTIE: rol view-only negasit: {role_id}")
@@ -165,7 +161,7 @@ async def on_ready():
     print(f"Bot Suport online ca {bot.user} | Servere: {len(bot.guilds)}")
     print(f"SUPPORT_VIEW_ROLE_IDS={SUPPORT_VIEW_ROLE_IDS}")
     print(f"SUPPORT_CONNECT_ROLE_IDS={SUPPORT_CONNECT_ROLE_IDS}")
-    print("VERSIUNE: VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186")
+    print("VERSIUNE: SUPPORT_SPEAK_AND_VOICE_ACTIVITY_ENABLED")
 
     for guild in bot.guilds:
         for channel in guild.voice_channels:
@@ -174,7 +170,7 @@ async def on_ready():
                 try:
                     await channel.edit(
                         overwrites=build_support_overwrites(guild),
-                        reason="VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186"
+                        reason="SUPPORT_SPEAK_AND_VOICE_ACTIVITY_ENABLED"
                     )
                     print(f"Permisiuni actualizate pentru: {channel.name}")
                 except Exception as e:
@@ -285,7 +281,7 @@ async def suport_fix_permissions(interaction: discord.Interaction):
             try:
                 await channel.edit(
                     overwrites=overwrites,
-                    reason="VIEW_ONLY_NO_SPEAK_BLOCK__CONNECT_1516635039520260186"
+                    reason="SUPPORT_SPEAK_AND_VOICE_ACTIVITY_ENABLED"
                 )
                 fixed += 1
             except Exception:
