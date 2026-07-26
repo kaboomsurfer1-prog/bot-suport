@@ -218,7 +218,7 @@ async def on_ready():
     print(f"Bot Suport online ca {bot.user} | Servere: {len(bot.guilds)}")
     print(f"SUPPORT_VIEW_ROLE_IDS={SUPPORT_VIEW_ROLE_IDS}")
     print(f"SUPPORT_CONNECT_ROLE_IDS={SUPPORT_CONNECT_ROLE_IDS}")
-    print("VERSIUNE: SUPPORT_FIRST_CHANNEL_PERMISSION_FIX")
+    print("VERSIUNE: SUPPORT_ORPHAN_CHANNEL_CLEANUP_V2")
 
     for guild in bot.guilds:
         for channel in guild.voice_channels:
@@ -278,6 +278,7 @@ async def on_voice_state_update(
         async with get_creation_lock(guild.id):
             number = get_next_support_number(guild, category)
             channel_name = f"{SUPPORT_CHANNEL_PREFIX} {number}"
+            new_channel: discord.VoiceChannel | None = None
 
             try:
                 initial_overwrites = build_support_overwrites(guild, creator=member)
@@ -291,25 +292,58 @@ async def on_voice_state_update(
                 )
                 dynamic_support_channels.add(new_channel.id)
 
-                # Correzione importante: riapplica i permessi e aspetta
-                # prima di spostare l'utente nel primo canale creato.
+                # Riapplica i permessi e aspetta prima di spostare l'utente.
                 new_channel = await apply_support_permissions(
                     new_channel,
                     creator=member,
                     reason="Fix speak si voice activity la creare",
                 )
 
-                # Sposta l'utente soltanto se è ancora nel canale Creare Suport.
-                if member.voice and member.voice.channel and member.voice.channel.id == SUPPORT_CREATE_CHANNEL_ID:
+                # Se l'utente è ancora in Creare Suport, lo sposta.
+                if (
+                    member.voice
+                    and member.voice.channel
+                    and member.voice.channel.id == SUPPORT_CREATE_CHANNEL_ID
+                ):
                     await member.move_to(
                         new_channel,
                         reason="Mutat in canalul suport creat",
                     )
 
-                print(f"Canal creat: {new_channel.name} pentru {member}")
+                    # Attende che Discord aggiorni lo stato vocale.
+                    await asyncio.sleep(1)
+
+                # Se nessuno è entrato nel nuovo canale, lo elimina automaticamente.
+                refreshed = guild.get_channel(new_channel.id)
+                if isinstance(refreshed, discord.VoiceChannel):
+                    non_bot_members = [m for m in refreshed.members if not m.bot]
+                    if not non_bot_members:
+                        print(f"Canal suport ramas gol dupa creare: {refreshed.name}")
+                        asyncio.create_task(delete_if_empty(refreshed.id))
+                    else:
+                        print(f"Canal creat: {refreshed.name} pentru {member}")
 
             except Exception as e:
                 print(f"Eroare la crearea canalului suport: {type(e).__name__}: {e}")
+
+                # Non lascia canali orfani se la creazione riesce ma lo spostamento fallisce.
+                if isinstance(new_channel, discord.VoiceChannel):
+                    try:
+                        current_channel = guild.get_channel(new_channel.id)
+                        if isinstance(current_channel, discord.VoiceChannel):
+                            non_bot_members = [m for m in current_channel.members if not m.bot]
+                            if not non_bot_members:
+                                await current_channel.delete(
+                                    reason="Canal suport orfan dupa eroare la mutare"
+                                )
+                                dynamic_support_channels.discard(current_channel.id)
+                                print(f"Canal orfan sters: {current_channel.name}")
+                    except Exception as delete_error:
+                        print(
+                            f"Nu pot sterge canalul suport orfan: "
+                            f"{type(delete_error).__name__}: {delete_error}"
+                        )
+
                 try:
                     await member.move_to(None)
                 except Exception:
